@@ -8,6 +8,8 @@
 #include <asm-generic/errno-base.h>
 #include <asm/uaccess.h>
 
+#include "synchmess-ioctl.h"
+
 MODULE_AUTHOR("Daniele Pasquini <pasqdaniele@gmail.com>");
 MODULE_DESCRIPTION("Thread Synchronization and Messaging Subsystem");
 MODULE_LICENSE("GPL");
@@ -29,6 +31,17 @@ struct file_operations synchmess_fops = {
 long synchmess_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 {
 	long ret = 0;
+	group_t group;
+
+	switch (cmd) {
+        case IOCTL_INSTALL_GROUP:
+			printk("Called ioctl()\n");
+			copy_from_user(&group, (group_t *)arg, sizeof(group_t));
+			printk("%s\n", group.name);
+			goto out;
+	}
+
+    out:
 	return ret;
 }
 
@@ -55,14 +68,14 @@ static int __init synchmess_init(void){
     
 	synchmess_major = register_chrdev(0, KBUILD_MODNAME, &synchmess_fops);
 
-	// Dynamically allocate a major for the device
+	// Dynamically allocate a major for the synchmess device
 	if (synchmess_major < 0) {
 		printk(KERN_ERR "%s: Failed registering char device\n", KBUILD_MODNAME);
 		err = synchmess_major;
 		goto failed_chrdevreg;
 	}
 
-	// Create a class for the device
+	// Create a class for the synchmess device
 	synchmess_dev_cl = class_create(THIS_MODULE, "synchmess");
 	if (IS_ERR(synchmess_dev_cl)) {
 		printk(KERN_ERR "%s: failed to register device class\n", KBUILD_MODNAME);
