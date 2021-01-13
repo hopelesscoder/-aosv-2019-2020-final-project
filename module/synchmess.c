@@ -19,9 +19,17 @@ MODULE_DESCRIPTION("Thread Synchronization and Messaging Subsystem");
 MODULE_LICENSE("GPL");
 MODULE_VERSION("1.0.0");
 
+static int max_message_size = 50;
+module_param(max_message_size,int,S_IRUSR|S_IWUSR|S_IRGRP|S_IWGRP|S_IROTH);
+MODULE_PARM_DESC(max_message_size,"The maximum size (bytes) currently allowed for posting messages to the device file");
+
+static int max_storage_size = 500;
+module_param(max_storage_size,int,S_IRUSR|S_IWUSR|S_IRGRP|S_IWGRP|S_IROTH);
+MODULE_PARM_DESC(max_storage_size,"The maximum number of bytes globally allowed for keeping messages in the device file");
+
 
 struct message_t {
-    char text[32];
+    char *text;
     struct list_head list;
 };
 
@@ -73,6 +81,10 @@ long synchgroup_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 	long ret = 0;
 
 	switch (cmd) {
+        case SET_SEND_DELAY:
+			goto out;
+            
+        case REVOKE_DELAYED_MESSAGES:
 			goto out;
 	}
 
@@ -92,8 +104,7 @@ int synchgroup_release(struct inode *inode, struct file *filp){
 }
 
 ssize_t synchgroup_read (struct file *file, char __user *buf, size_t count, loff_t *offset){
-    char *data = "Hello from the kernel world!\n";
-    size_t datalen = strlen(data);
+    char *data;
     struct list_head *ptr;
     struct list_head *ptr_message;
     struct group_dev *entry;
@@ -112,13 +123,18 @@ ssize_t synchgroup_read (struct file *file, char __user *buf, size_t count, loff
         if(entry->devt == file->f_path.dentry->d_inode->i_rdev){
             printk("Before list_first_entry\n");
             ptr_message = &entry->message.list;
+            if(list_empty(ptr_message)){
+                count = 0;
+                printk("List is empty\n");
+                return count;
+            }
             message = list_first_entry(ptr_message, struct message_t, list);
             printk("Synchgroup_read, message=%s\n",  *(&message->text));
             ptr_message_to_del = ptr_message->next;
             data = *(&message->text);
             
-            if (count > datalen) {
-                count = datalen;
+            if (count > strlen(data)) {
+                count = strlen(data);
             }
 
             if (copy_to_user(buf, data, count)) {
@@ -126,45 +142,53 @@ ssize_t synchgroup_read (struct file *file, char __user *buf, size_t count, loff
             }
             
             list_del(ptr_message_to_del);
+            kfree(message->text);
             kfree(message);
         }
     }
-
-    
 
     return count;
 }
 
 ssize_t synchgroup_write (struct file * file, const char __user *buf, size_t count, loff_t *offset){
-    size_t maxdatalen = 30, ncopied;
-    uint8_t databuf[maxdatalen];
+    size_t maxdatalen = max_message_size; 
+    size_t ncopied;
     struct list_head *ptr;
     struct group_dev *entry;
-    
     struct message_t *message;
+    struct list_head *ptr_message;
+    struct message_t *entry_message;
+    size_t counter_bytes = 0;
     
     printk("Synchgroup_write, minor=%d\n", MINOR(file->f_path.dentry->d_inode->i_rdev));
     
-    
-    message = kmalloc(sizeof(*message),GFP_KERNEL);
-    ncopied = copy_from_user(&message->text, buf, maxdatalen);
-    
-    list_for_each(ptr,&group_list){
-        //Add the message in the list of messages the right group_dev
-        entry=list_entry(ptr,struct group_dev, list);
-        //Search in the list of group_dev
-        if(entry->devt == file->f_path.dentry->d_inode->i_rdev){
-            list_add_tail(&message->list,&entry->message.list);
-        }
-    }
-    
-    
-
     if (count < maxdatalen) {
         maxdatalen = count;
     }
+    
+    message = kmalloc(sizeof(*message),GFP_KERNEL);
+    message->text = kmalloc(maxdatalen,GFP_KERNEL);
+    
+    ncopied = copy_from_user(message->text, buf, maxdatalen);
+    message->text[maxdatalen] = 0;
+    
+    list_for_each(ptr,&group_list){
+        //Add the message in the list of messages the right group_dev
+        entry = list_entry(ptr,struct group_dev, list);
+        //Search in the list of group_dev
+        if(entry->devt == file->f_path.dentry->d_inode->i_rdev){
+            list_for_each(ptr_message,&entry->message.list){
+                entry_message = list_entry(ptr_message,struct message_t, list);
+                counter_bytes += strlen(*(&entry_message->text));
+            }
+            if(counter_bytes > max_storage_size){
+                return EFBIG;
+            }
+                            
+            list_add_tail(&message->list,&entry->message.list);
+        }
+    }
 
-    ncopied = copy_from_user(databuf, buf, maxdatalen);
 
     if (ncopied == 0) {
         printk("Copied %zd bytes from the user\n", maxdatalen);
@@ -172,12 +196,10 @@ ssize_t synchgroup_write (struct file * file, const char __user *buf, size_t cou
         printk("Could't copy %zd bytes from the user\n", ncopied);
     }
 
-    databuf[maxdatalen] = 0;
-
     printk("Synchgroup_write, offset=%lld\n",*offset);
-    printk("Data from the user: %s\n", message->text);
+    printk("Data from the user: %s\n", buf);
 
-    return count;
+    return ncopied;
 }
 
 long synchmess_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
@@ -195,10 +217,10 @@ long synchmess_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
         case IOCTL_INSTALL_GROUP:
 			printk("Called ioctl()\n");
 			copy_from_user(&info, (ioctl_info *)arg, sizeof(ioctl_info));
-			printk("Group name: %d\n", info.group_t);
+			printk("Group name: %d\n", info.group.name);
             
             //Check if the group exists
-            snprintf(group_dev_file_name,sizeof(group_dev_file_name),"/dev/synch/synchgroup_%d",info.group_t);
+            snprintf(group_dev_file_name,sizeof(group_dev_file_name),"/dev/synch/synchgroup_%d",info.group.name);
             printk("Group file name: %s\n", group_dev_file_name);
             file = filp_open(group_dev_file_name, O_RDONLY, 0);
             if(!IS_ERR(file)){
@@ -210,10 +232,10 @@ long synchmess_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
                 // group doesn't exist
                 //strcpy(group_dev_name, "synch!synchgroup_");
                 //strcpy(group_dev_name, "synchgroup_");
-                //strcat(group_dev_name, info.group_t);
-                snprintf(group_dev_name,sizeof(group_dev_name),"synch!synchgroup_%d", info.group_t);
+                //strcat(group_dev_name, info.group.name);
+                snprintf(group_dev_name,sizeof(group_dev_name),"synch!synchgroup_%d", info.group.name);
                 // Create a device in the previously created class
-                synchgroup_device = device_create(synchgroup_dev_cl, NULL, MKDEV(synchgroup_major, info.group_t), NULL, group_dev_name);
+                synchgroup_device = device_create(synchgroup_dev_cl, NULL, MKDEV(synchgroup_major, info.group.name), NULL, group_dev_name);
                 if (IS_ERR(synchgroup_device)) {
                     printk(KERN_ERR "%s: failed to create device synchgroup\n", KBUILD_MODNAME);
                     ret = PTR_ERR(synchgroup_device);
@@ -224,14 +246,14 @@ long synchmess_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
                 
                 temp = kmalloc(sizeof(*temp),GFP_KERNEL);
                 snprintf(*(&temp->group_dev_name), sizeof(*(&temp->group_dev_name)), group_dev_name);
-                temp->devt = MKDEV(synchgroup_major, info.group_t);
+                temp->devt = MKDEV(synchgroup_major, info.group.name);
                 list_add_tail(&temp->list,&group_list);
                 
                 //init the first element of message list in group_dev
                 INIT_LIST_HEAD(&temp->message.list);
             }
             //only for logging purpose
-            snprintf(group_dev_name,sizeof(group_dev_name),"synch!synchgroup_%d", info.group_t);
+            snprintf(group_dev_name,sizeof(group_dev_name),"synch!synchgroup_%d", info.group.name);
             
             //only for logging purpose
             list_for_each(ptr,&group_list){
@@ -334,7 +356,10 @@ static void __exit synchmess_cleanup(void)
 {
     struct list_head *ptr;
     struct list_head* tmp;
+    struct list_head *ptr_message;
+    struct list_head* tmp_message;
     struct group_dev *entry;
+    struct message_t *entry_message;
     printk(KERN_INFO "%s: Cleaning up module.\n", KBUILD_MODNAME);
     device_destroy(synchmess_dev_cl, MKDEV(synchmess_major, 0));
 	class_unregister(synchmess_dev_cl);
@@ -347,7 +372,14 @@ static void __exit synchmess_cleanup(void)
 	class_unregister(synchgroup_dev_cl);
 	class_destroy(synchgroup_dev_cl);
     list_for_each_safe(ptr, tmp, &group_list){
-        entry=list_entry(ptr,struct group_dev, list);
+        entry = list_entry(ptr,struct group_dev, list);
+        
+        list_for_each_safe(ptr_message, tmp_message, &entry->message.list){
+            entry_message = list_entry(ptr_message,struct message_t, list);
+            list_del(ptr_message);
+            kfree(entry_message);
+        }
+        
         unregister_chrdev(synchgroup_major, entry->group_dev_name);
         list_del(ptr);
         kfree(entry);
