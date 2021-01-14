@@ -11,6 +11,7 @@
 #include <linux/buffer_head.h>
 #include <linux/list.h>
 #include <linux/slab.h>
+#include <linux/delay.h>
 
 #include "synchmess-ioctl.h"
 
@@ -38,6 +39,7 @@ struct group_dev {
     char group_dev_name[32];
     struct message_t message;
     struct list_head list;
+    struct mutex message_lock;
 };
 
 
@@ -122,10 +124,15 @@ ssize_t synchgroup_read (struct file *file, char __user *buf, size_t count, loff
         //Search in the list of group_dev
         if(entry->devt == file->f_path.dentry->d_inode->i_rdev){
             printk("Before list_first_entry\n");
+            
+            //to enable concurrent access
+            mutex_lock(&entry->message_lock);
+            
             ptr_message = &entry->message.list;
             if(list_empty(ptr_message)){
                 count = 0;
                 printk("List is empty\n");
+                mutex_unlock(&entry->message_lock);
                 return count;
             }
             message = list_first_entry(ptr_message, struct message_t, list);
@@ -144,6 +151,8 @@ ssize_t synchgroup_read (struct file *file, char __user *buf, size_t count, loff
             list_del(ptr_message_to_del);
             kfree(message->text);
             kfree(message);
+            
+            mutex_unlock(&entry->message_lock);
         }
     }
 
@@ -177,6 +186,11 @@ ssize_t synchgroup_write (struct file * file, const char __user *buf, size_t cou
         entry = list_entry(ptr,struct group_dev, list);
         //Search in the list of group_dev
         if(entry->devt == file->f_path.dentry->d_inode->i_rdev){
+            //to enable concurrent access
+            mutex_lock(&entry->message_lock);
+            
+            printk(KERN_ERR "After mutex_lock\n");
+            
             list_for_each(ptr_message,&entry->message.list){
                 entry_message = list_entry(ptr_message,struct message_t, list);
                 counter_bytes += strlen(*(&entry_message->text));
@@ -186,6 +200,10 @@ ssize_t synchgroup_write (struct file * file, const char __user *buf, size_t cou
             }
                             
             list_add_tail(&message->list,&entry->message.list);
+            
+            mutex_unlock(&entry->message_lock);
+            
+            printk(KERN_ERR "After mutex_unlock\n");
         }
     }
 
@@ -199,7 +217,7 @@ ssize_t synchgroup_write (struct file * file, const char __user *buf, size_t cou
     printk("Synchgroup_write, offset=%lld\n",*offset);
     printk("Data from the user: %s\n", buf);
 
-    return ncopied;
+    return maxdatalen;
 }
 
 long synchmess_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
@@ -251,6 +269,9 @@ long synchmess_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
                 
                 //init the first element of message list in group_dev
                 INIT_LIST_HEAD(&temp->message.list);
+                
+                //spin_lock_init(&temp->message_spinlock);
+                mutex_init(&temp->message_lock);
             }
             //only for logging purpose
             snprintf(group_dev_name,sizeof(group_dev_name),"synch!synchgroup_%d", info.group.name);
