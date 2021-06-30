@@ -105,6 +105,9 @@ struct file_operations synchgroup_fops = {
     flush: synchgroup_flush
 };
 
+//counter that keeps the last group minor
+static atomic_t groups_number;
+
 // Variables to correctly setup/shutdown the pseudo device file for synchgroup
 static int synchgroup_major;
 static struct class *synchgroup_dev_cl = NULL;
@@ -421,6 +424,7 @@ long synchmess_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
     struct file *file = NULL;
     struct group_dev *temp;
     char wq_name[32];
+    int next_minor;
     
 
 	switch (cmd) {
@@ -428,10 +432,10 @@ long synchmess_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 			printk(KERN_INFO "%s: IOCTL INSTALL GROUP operation, synchmess device.\n", KBUILD_MODNAME);
             
 			copy_from_user(&info, (ioctl_info *)arg, sizeof(ioctl_info));
-			printk(KERN_INFO "%s: IOCTL INSTALL GROUP operation, Group name: %d\n", KBUILD_MODNAME, info.group.name);
+			printk(KERN_INFO "%s: IOCTL INSTALL GROUP operation, Group name: %s\n", KBUILD_MODNAME, info.group.name);
             
             //Check if the group exists
-            snprintf(group_dev_file_name,sizeof(group_dev_file_name),"/dev/synch/synchgroup_%d",info.group.name);
+            snprintf(group_dev_file_name,sizeof(group_dev_file_name),"/dev/synch/synchgroup_%s",info.group.name);
 
             //try to open the file associated with the group
             file = filp_open(group_dev_file_name, O_RDONLY, 0);
@@ -443,9 +447,13 @@ long synchmess_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
                 copy_to_user((ioctl_info *)arg, &info, sizeof(ioctl_info));
             } else { // group doesn't exist
                 
-                snprintf(group_dev_name,sizeof(group_dev_name),"synch!synchgroup_%d", info.group.name);
+                snprintf(group_dev_name,sizeof(group_dev_name),"synch!synchgroup_%s", info.group.name);
                 // Create a device in the previously created class
-                synchgroup_device = device_create(synchgroup_dev_cl, NULL, MKDEV(synchgroup_major, info.group.name), NULL, group_dev_name);
+                
+                //minor for the new group is groups_number +1
+                next_minor = atomic_inc_return(&groups_number);
+                printk(KERN_INFO "%s: next_minor = %d\n", KBUILD_MODNAME, next_minor);
+                synchgroup_device = device_create(synchgroup_dev_cl, NULL, MKDEV(synchgroup_major, next_minor), NULL, group_dev_name);
                 if (IS_ERR(synchgroup_device)) {
                     printk(KERN_ERR "%s: failed to create device synchgroup\n", KBUILD_MODNAME);
                     ret = PTR_ERR(synchgroup_device);
@@ -453,7 +461,6 @@ long synchmess_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
                 printk(KERN_INFO "%s: special device synchgroup registered with major number %d\n", KBUILD_MODNAME, synchgroup_major);
                 //copy the file path of the file associated with the group in info
                 memcpy(&info.file_path, group_dev_file_name, strlen(group_dev_file_name));
-                //copy_to_user to make the file path available to the client
                 copy_to_user((ioctl_info *)arg, &info, sizeof(ioctl_info));
                 
                 //create a group_dev to be inserted in the list of groups
@@ -461,7 +468,7 @@ long synchmess_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
                 //group name
                 snprintf(*(&temp->group_dev_name), sizeof(*(&temp->group_dev_name)), group_dev_name);
                 //device number
-                temp->devt = MKDEV(synchgroup_major, info.group.name);
+                temp->devt = MKDEV(synchgroup_major, next_minor);
                 //default timeout for a group
                 temp->timeout_millis = 0;
                 //add the group to the list of group
@@ -477,7 +484,7 @@ long synchmess_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
                 mutex_init(&temp->group_lock);
                 
                 //name of the workqueue is the device group name
-                snprintf(wq_name,sizeof(wq_name),"synchgroup_%d",info.group.name);
+                snprintf(wq_name,sizeof(wq_name),"synchgroup_%s",info.group.name);
                 //create the workqueue where delayed work will be executed
                 temp->wq = create_workqueue(wq_name);
                 
@@ -563,6 +570,9 @@ static int __init synchmess_init(void){
     
     printk(KERN_INFO "%s: special device synchgroup registered with major number %d\n", KBUILD_MODNAME, synchgroup_major);
 
+    //init groups_number with 0
+    atomic_set(&groups_number, 0);
+    
 	return 0;
 
 failed_classreg_synchgroup:

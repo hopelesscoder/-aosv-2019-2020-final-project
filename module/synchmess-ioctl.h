@@ -5,7 +5,7 @@
 #define MYDEV_IOC_MAGIC 'R'
 
 typedef struct _group_t {
-	unsigned int name;
+	char name[11];
 } group_t;
 
 typedef struct _ioctl_info {

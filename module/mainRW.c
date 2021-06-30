@@ -69,7 +69,7 @@ int main(void) {
 		exit(EXIT_FAILURE);
 	}
     
-    info.group.name = 1;
+    snprintf(info.group.name,sizeof(info.group.name),"second");
 	ioctl(fd, IOCTL_INSTALL_GROUP, &info);
     printf("file path %s\n", info.file_path);
     
@@ -116,8 +116,8 @@ int main(void) {
     
     
     //SET_SEND_DELAY 30000 msec = 30 seconds
-    info.group.name = 1;
-    info.timeout_millis = 120000;
+    snprintf(info.group.name,sizeof(info.group.name),"second");
+    info.timeout_millis = 30000;
 	ioctl(fd_group, SET_SEND_DELAY, &info);
     printf("\n:::now we set send delay to 30 seconds and then write/read:::\n");
     

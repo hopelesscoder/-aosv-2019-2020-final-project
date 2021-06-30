@@ -38,7 +38,7 @@ int main(void) {
 		exit(EXIT_FAILURE);
 	}
 
-    info.group.name = 1;
+    snprintf(info.group.name,sizeof(info.group.name),"first");
 	ioctl(fd, IOCTL_INSTALL_GROUP, &info);
     printf("%s\n", info.file_path);
     
