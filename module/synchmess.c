@@ -442,7 +442,7 @@ long synchmess_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
             if(!IS_ERR(file)){//if the group exists
                 filp_close(file, 0);
                 //copy the file path of the file associated with the group in info
-                memcpy(&info.file_path, group_dev_file_name, strlen(group_dev_file_name));
+                strcpy(info.file_path, group_dev_file_name);
                 //copy_to_user to make the file path available to the client
                 copy_to_user((ioctl_info *)arg, &info, sizeof(ioctl_info));
             } else { // group doesn't exist
@@ -460,7 +460,7 @@ long synchmess_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
                 }
                 printk(KERN_INFO "%s: special device synchgroup registered with major number %d\n", KBUILD_MODNAME, synchgroup_major);
                 //copy the file path of the file associated with the group in info
-                memcpy(&info.file_path, group_dev_file_name, strlen(group_dev_file_name));
+                strcpy(info.file_path, group_dev_file_name);
                 copy_to_user((ioctl_info *)arg, &info, sizeof(ioctl_info));
                 
                 //create a group_dev to be inserted in the list of groups
